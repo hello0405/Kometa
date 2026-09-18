@@ -1,0 +1,10 @@
+# Optional thin image on official base (needs Hub: kometateam/kometa:base)
+ARG BASE_TAG=base
+FROM kometateam/kometa:${BASE_TAG}
+ARG BRANCH_NAME=tmdb-proxy
+ENV BRANCH_NAME=${BRANCH_NAME}
+ENV KOMETA_DOCKER=True
+COPY . /
+RUN python3 /scripts/wire_tmdb_proxy.py
+VOLUME /config
+ENTRYPOINT ["/tini", "-s", "python3", "kometa.py", "--"]

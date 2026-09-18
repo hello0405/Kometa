@@ -1,14 +1,21 @@
 # TMDB_PROXY (this fork)
 
-Clone `tmdb-proxy`, then `docker build`. Build wires the proxy into `modules/tmdb.py` automatically.
+Default `Dockerfile` builds **from source** with `python:3.13-slim` — no `kometateam/kometa:base` pull.
 
-## Usage
+```bash
+git clone -b tmdb-proxy https://github.com/hello0405/Kometa.git kometa-src
+cd kometa-src
+docker build -t hello0405/kometa:tmdb-proxy .
+```
+
+## Env
 ```yaml
 environment:
   - TMDB_PROXY=https://YOUR_PROXY_ROOT
 ```
-
-Or set `TMDB_API3_BASE` / `TMDB_API4_BASE`. Unset = official API.
+Or `TMDB_API3_BASE` / `TMDB_API4_BASE`. Unset = official API.
 
 ## Verify
-Log line: `TMDb API base: v3=... v4=...`
+Log: `TMDb API base: v3=... v4=...`
+
+Optional: `Dockerfile.official-base` if you already have official base locally.
