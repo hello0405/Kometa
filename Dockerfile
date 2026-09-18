@@ -7,6 +7,7 @@ ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV BRANCH_NAME=tmdb-proxy
 ENV KOMETA_DOCKER=True
+ENV KOMETA_WEB_PORT=8787
 
 COPY requirements.txt /requirements.txt
 
@@ -29,4 +30,7 @@ RUN python3 /scripts/wire_tmdb_proxy.py
 
 VOLUME /config
 WORKDIR /
-ENTRYPOINT ["/tini", "-s", "python3", "kometa.py", "--"]
+EXPOSE 8787
+# Web UI is the only long-running process (scheduler + locked runs).
+# CLI still available: python3 /kometa.py --run ...
+ENTRYPOINT ["/tini", "-s", "python3", "/webui/app.py"]
