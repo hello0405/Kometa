@@ -52,6 +52,7 @@
         <button class="primary" id="btnTv" onclick="runLib('电视剧')">Metadata 电视剧</button>
         <button class="secondary" id="btnMovie" onclick="runLib('电影')">Metadata 电影</button>
         <button class="warnbtn" id="btnFullTv" onclick="runLib('电视剧','full')">全量 电视剧</button>
+        <button class="warnbtn" id="btnFullMovie" onclick="runLib('电影','full')">全量 电影</button>
         <a class="btn ghost" href="/yml" target="_blank">查看 yml</a>
         <a class="btn ghost" href="/api/log" target="_blank">完整日志</a>
       </div>
@@ -89,7 +90,7 @@
         document.getElementById('libHint').textContent = running
           ? ('当前：' + (s.library || '') + ' / ' + (s.mode || '') + ' · 开始 ' + (s.started_at || ''))
           : '';
-        ['btnTv','btnMovie','btnFullTv'].forEach((id) => {
+        ['btnTv','btnMovie','btnFullTv','btnFullMovie'].forEach((id) => {
           const el = document.getElementById(id);
           if (el) el.disabled = running;
         });
