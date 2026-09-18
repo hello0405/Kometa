@@ -42,7 +42,8 @@ _state = {
 }
 _state_lock = threading.Lock()
 
-app = Flask(__name__, template_folder="templates")
+_BASE_DIR = Path(__file__).resolve().parent
+app = Flask(__name__, template_folder=str(_BASE_DIR / "templates"))
 
 
 def _now_str() -> str:
