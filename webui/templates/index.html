@@ -24,6 +24,7 @@
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .primary { background: #38bdf8; }
     .secondary { background: #a78bfa; }
+    .warnbtn { background: #fb923c; }
     .ghost { background: #334155; color: #e7ecf1; }
     pre {
       background: #0b1220; border: 1px solid #2a3544; border-radius: 8px;
@@ -35,7 +36,7 @@
 </head>
 <body>
   <h1>Kometa Web 控制台</h1>
-  <div class="sub">串行运行 · 避免 docker exec 叠进程 · 定时 {{ schedule_time }} · 默认库 {{ run_libraries }}</div>
+  <div class="sub">串行运行 · MP 默认仅 Metadata · 定时 {{ schedule_time }} / {{ schedule_mode }} · 默认库 {{ run_libraries }}</div>
 
   <div class="card">
     <div class="row" style="justify-content: space-between;">
@@ -44,12 +45,13 @@
           {% if running %}运行中{% else %}空闲{% endif %}
         </span>
         <span id="libHint" style="margin-left: 10px; color:#9aa7b5;">
-          {% if running %}当前：{{ library }} · 开始 {{ started_at }}{% endif %}
+          {% if running %}当前：{{ library }} / {{ mode }} · 开始 {{ started_at }}{% endif %}
         </span>
       </div>
       <div class="row">
-        <button class="primary" id="btnTv" onclick="runLib('电视剧')">立即运行 电视剧</button>
-        <button class="secondary" id="btnMovie" onclick="runLib('电影')">立即运行 电影</button>
+        <button class="primary" id="btnTv" onclick="runLib('电视剧')">Metadata 电视剧</button>
+        <button class="secondary" id="btnMovie" onclick="runLib('电影')">Metadata 电影</button>
+        <button class="warnbtn" id="btnFullTv" onclick="runLib('电视剧','full')">全量 电视剧</button>
         <a class="btn ghost" href="/yml" target="_blank">查看 yml</a>
         <a class="btn ghost" href="/api/log" target="_blank">完整日志</a>
       </div>
@@ -58,13 +60,13 @@
       上次：
       <span id="lastInfo">
         {% if last_finished_at %}
-          {{ last_finished_at }} · {{ last_library }} ·
+          {{ last_finished_at }} · {{ last_library }} / {{ last_mode }} ·
           {% if last_ok %}<span class="ok">成功</span>{% else %}<span class="fail">失败 ({{ last_returncode }})</span>{% endif %}
         {% else %}尚无{% endif %}
       </span>
     </div>
     <div class="msg" id="msg"></div>
-    <p class="warn">⚠ 无鉴权，请仅在局域网访问；勿映射到公网。</p>
+    <p class="warn">默认只跑 metadata（配 PlexTmdbMatch yml）。全量会扫 collection/overlay/整库，ARM 上谨慎点。无鉴权，勿映射公网。</p>
   </div>
 
   <div class="card">
@@ -85,14 +87,16 @@
         badge.textContent = running ? '运行中' : '空闲';
         badge.className = 'badge ' + (running ? 'busy' : 'idle');
         document.getElementById('libHint').textContent = running
-          ? ('当前：' + (s.library || '') + ' · 开始 ' + (s.started_at || ''))
+          ? ('当前：' + (s.library || '') + ' / ' + (s.mode || '') + ' · 开始 ' + (s.started_at || ''))
           : '';
-        document.getElementById('btnTv').disabled = running;
-        document.getElementById('btnMovie').disabled = running;
+        ['btnTv','btnMovie','btnFullTv'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.disabled = running;
+        });
         let last = '尚无';
         if (s.last_finished_at) {
           const ok = s.last_ok ? '<span class="ok">成功</span>' : ('<span class="fail">失败 (' + s.last_returncode + ')</span>');
-          last = s.last_finished_at + ' · ' + (s.last_library || '') + ' · ' + ok;
+          last = s.last_finished_at + ' · ' + (s.last_library || '') + ' / ' + (s.last_mode || '') + ' · ' + ok;
         }
         document.getElementById('lastInfo').innerHTML = last;
         document.getElementById('log').textContent = s.log_tail || '(暂无日志)';
@@ -101,13 +105,14 @@
       }
     }
 
-    async function runLib(library) {
+    async function runLib(library, mode) {
       document.getElementById('msg').textContent = '正在提交…';
       try {
+        const body = { library, mode: mode || 'metadata' };
         const r = await fetch('/api/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ library }),
+          body: JSON.stringify(body),
         });
         const j = await r.json().catch(() => ({}));
         if (r.status === 409) {
