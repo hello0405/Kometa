@@ -4,24 +4,41 @@
 
 > **无鉴权**：仅建议在局域网使用，不要把端口映射到公网。
 
+## 与 MoviePilot 插件的对齐
+
+PlexTmdbMatch 只写 `/config/plextmdbmatch.yml`。插件触发的 **默认 mode 是 `metadata`**：
+
+```text
+python3 /kometa.py --run --metadata-only --ignore-schedules --run-libraries 电视剧
+```
+
+不要用插件去打全量 `--run`（会把 collection/overlay/整库 operations 跑一遍）。夜里全量走定时 `KOMETA_SCHEDULE_MODE=full`。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `KOMETA_WEB_PORT` | `8787` | Web 监听端口（绑定 `0.0.0.0`） |
-| `KOMETA_TIME` | （空） | 每日定时，逗号分隔 `HH:MM`，如 `03:00,15:00` |
-| `KOMETA_RUN_LIBRARIES` | `电视剧` | 定时要跑的媒体库，逗号分隔 |
-| `TMDB_PROXY` | （空） | TMDB 反代根地址（见 `docs/TMDB_PROXY.md`） |
+| `KOMETA_WEB_PORT` | `8787` | Web 监听端口 |
+| `KOMETA_WEB_DEFAULT_MODE` | `metadata` | 手动/API 默认：`metadata` / `full` / `overlays` / `collections` / `operations` |
+| `KOMETA_SCHEDULE_MODE` | `full` | 定时任务模式 |
+| `KOMETA_TIME` | （空） | 每日定时，逗号分隔 `HH:MM` |
+| `KOMETA_RUN_LIBRARIES` | `电视剧` | 定时库，逗号或 `\|` 分隔 |
+| `TMDB_PROXY` | （空） | TMDB 反代根地址 |
 
-## 功能
+## API
 
-- 页面 `/`：状态、上次结果、「立即运行 电视剧 / 电影」、查看 yml / 日志
-- `POST /api/run`：`{"library":"电视剧"}` — 忙时返回 **409**
-- `GET /api/status`：运行状态 + 日志尾部
-- `GET /api/log`：完整上次运行日志（`/config/webui-last-run.log`）
-- `GET /yml` 或 `/api/yml`：只读 `/config/plextmdbmatch.yml`
+```http
+POST /api/run
+{"library":"电视剧"}
+{"library":"电视剧","mode":"metadata"}
+{"library":"电视剧","mode":"full"}
+```
 
-定时与手动共用同一把锁；CLI 仍可用：`python3 /kometa.py --run ...`（请勿与 Web 同时手动叠跑）。
+兼容字段：`preset` 等同 `mode`，`libraries` 等同 `library`。忙时 **409**。
+
+- `GET /api/status`
+- `GET /api/log`
+- `GET /yml`
 
 ## docker-compose 示例
 
@@ -35,7 +52,9 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - KOMETA_WEB_PORT=8787
-      - KOMETA_TIME=03:00,15:00
+      - KOMETA_WEB_DEFAULT_MODE=metadata
+      - KOMETA_SCHEDULE_MODE=full
+      - KOMETA_TIME=03:00
       - KOMETA_RUN_LIBRARIES=电视剧
       - TMDB_PROXY=https://你的反代根地址
     volumes:
@@ -43,13 +62,4 @@ services:
     restart: unless-stopped
 ```
 
-## 重建镜像
-
-```bash
-git clone -b tmdb-proxy https://github.com/hello0405/Kometa.git
-cd Kometa
-docker build -t hello0405/kometa:tmdb-proxy .
-docker compose up -d
-```
-
-浏览器打开：`http://NAS_IP:8787`
+重建镜像后生效。浏览器：`http://NAS_IP:8787`
