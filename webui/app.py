@@ -5,6 +5,7 @@
 - 唯一长驻进程；用线程锁串行化 kometa --run，避免 docker exec 叠进程卡死
 - 可选按 KOMETA_TIME 定时跑（同一把锁）
 - 无鉴权，仅建议局域网使用
+- 默认 mode=metadata（配 PlexTmdbMatch 只写 metadata yml）
 """
 from __future__ import annotations
 
@@ -28,14 +29,41 @@ CONFIG_DIR = Path(os.environ.get("KOMETA_CONFIG") or "/config")
 LOG_PATH = CONFIG_DIR / "webui-last-run.log"
 YML_PATH = CONFIG_DIR / "plextmdbmatch.yml"
 RUN_LIBRARIES_DEFAULT = "电视剧"
+DEFAULT_MODE = (os.environ.get("KOMETA_WEB_DEFAULT_MODE") or "metadata").strip().lower()
+SCHEDULE_MODE = (os.environ.get("KOMETA_SCHEDULE_MODE") or "full").strip().lower()
+
+MODES = {
+    "metadata": {
+        "label": "仅 Metadata",
+        "flags": ["--run", "--metadata-only", "--ignore-schedules"],
+    },
+    "overlays": {
+        "label": "仅 Overlay",
+        "flags": ["--run", "--overlays-only", "--ignore-schedules"],
+    },
+    "collections": {
+        "label": "仅 Collection",
+        "flags": ["--run", "--collections-only", "--ignore-schedules"],
+    },
+    "operations": {
+        "label": "仅 Operations",
+        "flags": ["--run", "--operations-only", "--ignore-schedules"],
+    },
+    "full": {
+        "label": "全量",
+        "flags": ["--run", "--ignore-schedules"],
+    },
+}
 
 _run_lock = threading.Lock()
 _state = {
     "running": False,
     "library": None,
+    "mode": None,
     "started_at": None,
     "last_finished_at": None,
     "last_library": None,
+    "last_mode": None,
     "last_returncode": None,
     "last_ok": None,
     "last_error": None,
@@ -52,7 +80,14 @@ def _now_str() -> str:
 
 def _parse_libraries(raw: str | None) -> list[str]:
     text = (raw or "").strip() or RUN_LIBRARIES_DEFAULT
-    return [x.strip() for x in text.split(",") if x.strip()]
+    return [x.strip() for x in text.replace("|", ",").split(",") if x.strip()]
+
+
+def _normalize_mode(raw: str | None, fallback: str) -> str:
+    mode = (raw or "").strip().lower() or fallback
+    if mode not in MODES:
+        return fallback if fallback in MODES else "metadata"
+    return mode
 
 
 def _tail_log(max_chars: int = 8000) -> str:
@@ -67,13 +102,17 @@ def _tail_log(max_chars: int = 8000) -> str:
         return f"(读日志失败: {e})"
 
 
-def _do_run(library: str) -> int:
+def _do_run(library: str, mode: str) -> int:
     """在已持有 _run_lock 的前提下执行一次 kometa。"""
+    mode = _normalize_mode(mode, DEFAULT_MODE)
+    flags = list(MODES[mode]["flags"])
+    cmd = ["python3", KOMETA_PY, *flags, "--run-libraries", library]
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     started = _now_str()
     with _state_lock:
         _state["running"] = True
         _state["library"] = library
+        _state["mode"] = mode
         _state["started_at"] = started
         _state["last_error"] = None
 
@@ -81,7 +120,8 @@ def _do_run(library: str) -> int:
         f"===== Kometa Web 运行 =====\n"
         f"开始: {started}\n"
         f"媒体库: {library}\n"
-        f"命令: python3 {KOMETA_PY} --run --run-libraries {library}\n"
+        f"模式: {mode} ({MODES[mode]['label']})\n"
+        f"命令: {' '.join(cmd)}\n"
         f"===========================\n\n"
     )
     try:
@@ -89,7 +129,7 @@ def _do_run(library: str) -> int:
             logf.write(header)
             logf.flush()
             proc = subprocess.Popen(
-                ["python3", KOMETA_PY, "--run", "--run-libraries", library],
+                cmd,
                 cwd="/",
                 stdout=logf,
                 stderr=subprocess.STDOUT,
@@ -112,37 +152,39 @@ def _do_run(library: str) -> int:
     with _state_lock:
         _state["running"] = False
         _state["library"] = None
+        _state["mode"] = None
         _state["last_finished_at"] = finished
         _state["last_library"] = library
+        _state["last_mode"] = mode
         _state["last_returncode"] = rc
         _state["last_ok"] = rc == 0
     return rc
 
 
-def try_start_run(library: str, *, wait: bool = False) -> tuple[bool, str]:
-    """尝试启动一次运行。wait=False 时忙则失败；wait=True 时阻塞等锁。"""
+def try_start_run(library: str, mode: str | None = None, *, wait: bool = False) -> tuple[bool, str, str]:
     library = (library or "").strip() or RUN_LIBRARIES_DEFAULT
+    mode = _normalize_mode(mode, DEFAULT_MODE)
     acquired = _run_lock.acquire(blocking=wait)
     if not acquired:
-        return False, "busy"
+        return False, "busy", mode
 
     def worker():
         try:
-            _do_run(library)
+            _do_run(library, mode)
         finally:
             _run_lock.release()
 
-    threading.Thread(target=worker, name=f"kometa-run-{library}", daemon=True).start()
-    return True, "started"
+    threading.Thread(target=worker, name=f"kometa-run-{mode}-{library}", daemon=True).start()
+    return True, "started", mode
 
 
 def _scheduled_job():
     libs = _parse_libraries(os.environ.get("KOMETA_RUN_LIBRARIES"))
+    mode = _normalize_mode(SCHEDULE_MODE, "full")
     for lib in libs:
-        # 定时任务同步持锁执行，与手动 API 共用同一把锁
         _run_lock.acquire(blocking=True)
         try:
-            _do_run(lib)
+            _do_run(lib, mode)
         finally:
             _run_lock.release()
 
@@ -157,10 +199,11 @@ def _setup_schedule():
         return
     times = [t.strip() for t in raw.split(",") if t.strip()]
     libs = _parse_libraries(os.environ.get("KOMETA_RUN_LIBRARIES"))
+    mode = _normalize_mode(SCHEDULE_MODE, "full")
     for t in times:
         try:
             schedule.every().day.at(t).do(_scheduled_job)
-            print(f"[webui] 已安排每日 {t} 运行库: {libs}", flush=True)
+            print(f"[webui] 已安排每日 {t} mode={mode} 库: {libs}", flush=True)
         except Exception as e:
             print(f"[webui] 无效时间 {t!r}: {e}", flush=True)
 
@@ -183,25 +226,39 @@ def index():
         "index.html",
         running=st["running"],
         library=st["library"],
+        mode=st["mode"],
         started_at=st["started_at"],
         last_finished_at=st["last_finished_at"],
         last_library=st["last_library"],
+        last_mode=st["last_mode"],
         last_returncode=st["last_returncode"],
         last_ok=st["last_ok"],
         last_error=st["last_error"],
         schedule_time=os.environ.get("KOMETA_TIME") or "（未设置）",
+        schedule_mode=SCHEDULE_MODE,
         run_libraries=os.environ.get("KOMETA_RUN_LIBRARIES") or RUN_LIBRARIES_DEFAULT,
+        default_mode=DEFAULT_MODE,
     )
 
 
 @app.post("/api/run")
 def api_run():
     data = request.get_json(silent=True) or {}
-    library = (data.get("library") or "").strip() or RUN_LIBRARIES_DEFAULT
-    ok, msg = try_start_run(library, wait=False)
+    library = (data.get("library") or data.get("libraries") or "").strip() or RUN_LIBRARIES_DEFAULT
+    if "|" in library:
+        library = library.split("|")[0].strip()
+    mode = data.get("mode") or data.get("preset") or DEFAULT_MODE
+    ok, msg, mode = try_start_run(library, mode, wait=False)
     if not ok:
         return jsonify({"ok": False, "error": "正在运行中，请稍后再试", "code": "busy"}), 409
-    return jsonify({"ok": True, "message": f"已开始运行：{library}", "library": library})
+    return jsonify(
+        {
+            "ok": True,
+            "message": f"已开始运行：{library} ({MODES[mode]['label']})",
+            "library": library,
+            "mode": mode,
+        }
+    )
 
 
 @app.get("/api/status")
@@ -212,15 +269,19 @@ def api_status():
         {
             "running": st["running"],
             "library": st["library"],
+            "mode": st["mode"],
             "started_at": st["started_at"],
             "last_finished_at": st["last_finished_at"],
             "last_library": st["last_library"],
+            "last_mode": st["last_mode"],
             "last_returncode": st["last_returncode"],
             "last_ok": st["last_ok"],
             "last_error": st["last_error"],
             "log_tail": _tail_log(4000),
             "schedule_time": os.environ.get("KOMETA_TIME") or "",
+            "schedule_mode": SCHEDULE_MODE,
             "run_libraries": os.environ.get("KOMETA_RUN_LIBRARIES") or RUN_LIBRARIES_DEFAULT,
+            "default_mode": DEFAULT_MODE,
         }
     )
 
@@ -251,7 +312,7 @@ def api_yml():
 
 def main():
     print(f"[webui] Kometa Web 控制台启动 0.0.0.0:{WEB_PORT}", flush=True)
-    print(f"[webui] 无鉴权（仅局域网）；日志 {LOG_PATH}", flush=True)
+    print(f"[webui] 无鉴权（仅局域网）；默认 mode={DEFAULT_MODE}；日志 {LOG_PATH}", flush=True)
     _setup_schedule()
     app.run(host="0.0.0.0", port=WEB_PORT, threaded=True, use_reloader=False)
 
